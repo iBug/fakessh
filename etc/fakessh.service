@@ -1,0 +1,48 @@
+[Unit]
+Description=FakeSSH Tarpit
+Requires=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+Restart=always
+RestartSec=30sec
+ExecStart=/usr/local/sbin/fakessh
+ExecReload=/bin/kill -SIGHUP $MAINPID
+KillSignal=SIGTERM
+
+# Stop trying to restart the service if it restarts too many times in a row
+StartLimitInterval=1min
+StartLimitBurst=3
+
+StandardOutput=append:/var/log/fakessh/stdout.log
+StandardError=append:/var/log/fakessh/stderr.log
+StandardInput=null
+
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectClock=true
+ProtectHome=true
+ProtectHostname=true
+InaccessiblePaths=/run
+TemporaryFileSystem=/var:ro
+BindPaths=/var/log/fakessh
+
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+#PrivateUsers=true
+
+NoNewPrivileges=true
+ConfigurationDirectory=fakessh
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+SystemCallFilter=~@module @mount @debug @reboot @swap:EPERM
+
+[Install]
+WantedBy=multi-user.target
