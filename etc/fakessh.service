@@ -26,7 +26,6 @@ ProtectSystem=full
 ProtectClock=true
 ProtectHome=true
 ProtectHostname=true
-InaccessiblePaths=/run
 TemporaryFileSystem=/var:ro
 BindPaths=/var/log/fakessh
 
