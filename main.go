@@ -215,6 +215,7 @@ func handleExecRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
 	err := generateOutput(cmd, ch)
 	exitCode := byte(0)
 	if err != nil {
+		log.Print("Error generating output:", err)
 		exitCode = 1
 	}
 	ch.SendRequest("exit-status", false, []byte{0, 0, 0, exitCode})

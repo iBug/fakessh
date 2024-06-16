@@ -52,7 +52,10 @@ func saveCommands() error {
 	defer f.Close()
 	saveStateMu.RLock()
 	defer saveStateMu.RUnlock()
-	return json.NewEncoder(f).Encode(&saveState)
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	return enc.Encode(&saveState)
 }
 
 func getSavedCommand(cmd string) (string, bool) {
@@ -115,5 +118,10 @@ func init() {
 	}
 	log.Print("Found OpenAI API key, enabling AI generation")
 	client = openai.NewClient(key)
-	saveState.Commands = make(map[string]string)
+	if err := loadCommands(); err != nil {
+		log.Print("Error loading saved command output:", err)
+	}
+	if saveState.Commands == nil {
+		saveState.Commands = make(map[string]string)
+	}
 }
