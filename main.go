@@ -14,6 +14,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,11 +70,12 @@ func main() {
 	openLogFile()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP)
-	go func() {
-		<-sigCh
+	go func(c <-chan os.Signal) {
+		<-c
 		logger.Println("[system] received SIGHUP, reopening log file")
 		openLogFile()
-	}()
+		runtime.GC()
+	}(sigCh)
 
 	serverConfig := &ssh.ServerConfig{
 		MaxAuthTries:     3,
@@ -108,7 +111,7 @@ func passwordCallback(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions,
 		conn.User(),
 		string(password))
 	if string(conn.ClientVersion()) == "SSH-2.0-Go" {
-		return nil, errBadPassword
+		//return nil, errBadPassword
 	}
 	return nil, nil
 }
@@ -165,6 +168,35 @@ func handleSessionChannel(c *ssh.ServerConn, ch ssh.Channel, reqs <-chan *ssh.Re
 	}
 }
 
+func generateOutput(cmd string, w io.Writer) error {
+	cmdlen := len(cmd)
+	if cmd == "help" {
+		w.Write([]byte("Glad you asked. This is https://github.com/iBug/fakessh, go and read the code by yourself.\n"))
+		return nil
+	}
+	if client != nil {
+		output, err := generateOutputOpenAI(cmd)
+		io.WriteString(w, output)
+		if !strings.HasSuffix(output, "\n") {
+			w.Write([]byte("\n"))
+		}
+		return err
+	}
+
+	// Manual response generation
+	switch cmd {
+	case "nproc; uname -a":
+		w.Write([]byte("16\nLinux localhost 4.19.0-16-amd64 #1 SMP Debian 4.19.181-1 (2021-03-19) x86_64 GNU/Linux\n"))
+	case "echo xsec":
+		w.Write([]byte("xsec\n"))
+	default:
+		junkSize := cmdlen + mathrand.Intn(3*cmdlen)
+		io.CopyN(w, rand.Reader, int64(junkSize))
+		w.Write([]byte{'\n'})
+	}
+	return nil
+}
+
 func handleExecRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
 	if len(req.Payload) < 4 {
 		logger.Printf("[exec] ip=%s cmd=<invalid>\n", c.RemoteAddr())
@@ -177,11 +209,15 @@ func handleExecRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
 		s := fmt.Sprintf("wrong command length, want %d, got %d", cmdlen, len(req.Payload)-4)
 		logger.Printf("[warning] [exec] ip=%s err=%q\n", c.RemoteAddr(), s)
 	}
-	logger.Printf("[exec] ip=%s cmd=%q\n", c.RemoteAddr(), string(req.Payload[4:]))
-	junkSize := cmdlen + mathrand.Intn(3*cmdlen)
-	io.CopyN(ch, rand.Reader, int64(junkSize))
-	ch.Write([]byte{'\n'})
-	ch.SendRequest("exit-status", false, []byte{0, 0, 0, 0})
+	cmd := string(req.Payload[4:])
+
+	logger.Printf("[exec] ip=%s cmd=%q\n", c.RemoteAddr(), cmd)
+	err := generateOutput(cmd, ch)
+	exitCode := byte(0)
+	if err != nil {
+		exitCode = 1
+	}
+	ch.SendRequest("exit-status", false, []byte{0, 0, 0, exitCode})
 }
 
 func handleShellRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
