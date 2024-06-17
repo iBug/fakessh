@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -21,6 +22,20 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+type SSHContext struct {
+	Hostname string
+	User     string
+	T        time.Time
+}
+
+func (sshCtx SSHContext) String() string {
+	return fmt.Sprintf(
+		"System information:\nHostname: %s\nUser: %s\nTime: %s",
+		sshCtx.Hostname,
+		sshCtx.User,
+		sshCtx.T.Format(rfc2822))
+}
 
 var (
 	errBadPassword = errors.New("permission denied")
@@ -125,8 +140,10 @@ func handleConn(conn net.Conn, serverConfig *ssh.ServerConfig) {
 			// don't log authentication failures
 		} else if err == io.EOF {
 			logger.Printf("[conn] ip=%s err=io.EOF\n", conn.RemoteAddr())
-		} else {
+		} else if reflect.TypeOf(err).String() == "*errors.errorString" {
 			logger.Printf("[conn] ip=%s err=%q\n", conn.RemoteAddr(), err)
+		} else {
+			logger.Printf("[conn] ip=%s errT=%T err=%q\n", conn.RemoteAddr(), err, err)
 		}
 		return
 	}
@@ -168,14 +185,14 @@ func handleSessionChannel(c *ssh.ServerConn, ch ssh.Channel, reqs <-chan *ssh.Re
 	}
 }
 
-func generateOutput(cmd string, w io.Writer) error {
+func generateOutput(w io.Writer, cmd string, sshCtx SSHContext) error {
 	cmdlen := len(cmd)
 	if cmd == "help" {
 		w.Write([]byte("Glad you asked. This is https://github.com/iBug/fakessh, go and read the code by yourself.\n"))
 		return nil
 	}
 	if client != nil {
-		output, err := generateOutputOpenAI(cmd)
+		output, err := generateOutputOpenAI(cmd, sshCtx)
 		io.WriteString(w, output)
 		if !strings.HasSuffix(output, "\n") {
 			w.Write([]byte("\n"))
@@ -212,7 +229,12 @@ func handleExecRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
 	cmd := string(req.Payload[4:])
 
 	logger.Printf("[exec] ip=%s cmd=%q\n", c.RemoteAddr(), cmd)
-	err := generateOutput(cmd, ch)
+	sshCtx := SSHContext{
+		Hostname: "localhost",
+		User:     c.User(),
+		T:        time.Now(),
+	}
+	err := generateOutput(ch, cmd, sshCtx)
 	exitCode := byte(0)
 	if err != nil {
 		log.Print("Error generating output:", err)

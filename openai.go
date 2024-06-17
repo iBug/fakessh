@@ -76,11 +76,15 @@ func normalizeCommand(cmd string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(cmd)), " ")
 }
 
-func createCompletion(ctx context.Context, cmd string) (string, error) {
+func createCompletion(ctx context.Context, cmd string, sshCtx SSHContext) (string, error) {
 	messages := []openai.ChatCompletionMessage{
 		{
 			Role:    openai.ChatMessageRoleSystem,
 			Content: systemPrompt,
+		},
+		{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: sshCtx.String(),
 		},
 		{
 			Role:    openai.ChatMessageRoleUser,
@@ -97,12 +101,12 @@ func createCompletion(ctx context.Context, cmd string) (string, error) {
 	return resp.Choices[0].Message.Content, nil
 }
 
-func generateOutputOpenAI(cmd string) (string, error) {
+func generateOutputOpenAI(cmd string, sshCtx SSHContext) (string, error) {
 	cmd = normalizeCommand(cmd)
 	if output, ok := getSavedCommand(cmd); ok {
 		return output, nil
 	}
-	output, err := createCompletion(context.Background(), cmd)
+	output, err := createCompletion(context.Background(), cmd, sshCtx)
 	if err == nil {
 		err = setSavedCommand(cmd, output)
 	}
