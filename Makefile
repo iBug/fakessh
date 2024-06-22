@@ -4,7 +4,7 @@ BIN = fakessh
 
 all: $(BIN)
 
-$(BIN): $(wildcard *.go) go.mod go.sum
+$(BIN): $(wildcard *.go) go.mod go.sum system_prompt.txt
 	go build -ldflags="-s -w"
 
 install:
