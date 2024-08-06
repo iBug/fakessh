@@ -86,10 +86,11 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP)
 	go func(c <-chan os.Signal) {
-		<-c
-		logger.Println("[system] received SIGHUP, reopening log file")
-		openLogFile()
-		runtime.GC()
+		for range c {
+			logger.Println("[system] received SIGHUP, reopening log file")
+			openLogFile()
+			runtime.GC()
+		}
 	}(sigCh)
 
 	serverConfig := &ssh.ServerConfig{
