@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -16,7 +17,8 @@ import (
 const (
 	defaultSaveStatePath = "/var/lib/fakessh/commands.json"
 
-	rfc2822 = "Mon Jan 02 15:04:05 -0700 2006"
+	// rfc2822 = "Mon Jan 02 15:04:05 -0700 2006"
+	rfc2822 = time.RubyDate
 )
 
 type SaveState struct {
