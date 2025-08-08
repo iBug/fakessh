@@ -5,7 +5,7 @@ BIN = fakessh
 all: $(BIN)
 
 $(BIN): $(wildcard *.go) go.mod go.sum system_prompt.txt
-	go build -ldflags="-s -w"
+	go build -ldflags="-s -w" -trimpath
 
 install:
 	install -Dm755 $(BIN) /usr/local/sbin/

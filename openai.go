@@ -25,6 +25,7 @@ type SaveState struct {
 
 var (
 	client      *openai.Client
+	model       string = openai.GPT4oMini
 	statePath   string
 	saveState   SaveState
 	saveStateMu sync.RWMutex
@@ -92,7 +93,7 @@ func createCompletion(ctx context.Context, cmd string, sshCtx SSHContext) (strin
 		},
 	}
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:    "gpt-4o-mini",
+		Model:    model,
 		Messages: messages,
 	})
 	if err != nil {
@@ -121,7 +122,19 @@ func init() {
 		return
 	}
 	log.Print("Found OpenAI API key, enabling AI generation")
-	client = openai.NewClient(key)
+	config := openai.DefaultConfig(key)
+
+	baseURL := os.Getenv("OPENAI_BASEURL")
+	if baseURL != "" {
+		config.BaseURL = baseURL
+	}
+
+	aiModel := os.Getenv("OPENAI_MODEL")
+	if aiModel != "" {
+		model = aiModel
+	}
+
+	client = openai.NewClientWithConfig(config)
 	if err := loadCommands(); err != nil {
 		log.Print("Error loading saved command output:", err)
 	}
