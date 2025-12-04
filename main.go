@@ -53,6 +53,7 @@ var (
 const (
 	defaultLogPath    = "/var/log/fakessh/fakessh.log"
 	defaultListenAddr = ":22"
+	myHomepage        = "https://github.com/iBug/fakessh"
 )
 
 var (
@@ -189,7 +190,7 @@ func handleSessionChannel(c *ssh.ServerConn, ch ssh.Channel, reqs <-chan *ssh.Re
 func generateOutput(w io.Writer, cmd string, sshCtx SSHContext) error {
 	cmdlen := len(cmd)
 	if cmd == "help" {
-		w.Write([]byte("Glad you asked. This is https://github.com/iBug/fakessh, go and read the code by yourself.\n"))
+		fmt.Fprintf(w, "Glad you asked. This is %s, go and read the code by yourself.\n", myHomepage)
 		return nil
 	}
 	if client != nil {
@@ -244,12 +245,17 @@ func handleExecRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
 	ch.SendRequest("exit-status", false, []byte{0, 0, 0, exitCode})
 }
 
+const logShellHistoryLen = 100
+
 func handleShellRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
 	logger.Printf("[shell] ip=%s\n", c.RemoteAddr())
 	head := make([]byte, 0, 1024)
 	buf := make([]byte, 4096)
 	total := 0
 	start := time.Now()
+
+	// MOTD
+	fmt.Fprintf(ch, "Welcome to localhost! If any command seems wrong, please read help at %s.\n", myHomepage)
 
 	prompt := fmt.Sprintf("[%s@localhost] $ ", c.User())
 	io.WriteString(ch, prompt)
@@ -262,12 +268,12 @@ outer:
 			logger.Printf("[shell] ip=%s bytes=%d err=%q\n", c.RemoteAddr(), total, err)
 			return
 		}
-		if total < 100 {
-			copySize := 100 - total
+		if total < logShellHistoryLen {
+			copySize := logShellHistoryLen - total
 			if copySize > n {
 				copySize = n
 			}
-			copy(head[total:100], buf[:n])
+			copy(head[total:logShellHistoryLen], buf[:n])
 			head = head[:len(head)+copySize]
 		}
 		total += n
