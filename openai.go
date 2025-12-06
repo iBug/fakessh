@@ -13,7 +13,13 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-const defaultSaveStatePath = "/var/lib/fakessh/commands.json"
+const (
+	defaultSaveStatePath = "/var/lib/fakessh/commands.json"
+
+	// Long commands and outputs are discarded to save space
+	maxCommandLength = 256
+	maxOutputLength  = 1024
+)
 
 type SaveState struct {
 	Commands map[string]string `json:"commands"`
@@ -48,11 +54,19 @@ func saveCommands() error {
 	}
 	defer f.Close()
 	saveStateMu.RLock()
-	defer saveStateMu.RUnlock()
+	cmdCopy := make(map[string]string, len(saveState.Commands))
+	for k, v := range saveState.Commands {
+		if len(k) < maxCommandLength && len(v) < maxOutputLength {
+			cmdCopy[k] = v
+		}
+	}
+	saveStateMu.RUnlock()
+
+	saveStateCopy := SaveState{Commands: cmdCopy}
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	return enc.Encode(&saveState)
+	return enc.Encode(&saveStateCopy)
 }
 
 func getSavedCommand(cmd string) (string, bool) {
