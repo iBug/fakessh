@@ -195,7 +195,14 @@ func generateOutput(w io.Writer, cmd string, sshCtx SSHContext) error {
 	if cmd == "help" {
 		fmt.Fprintf(w, "Glad you asked. This is %s, go and read the code by yourself.\n", myHomepage)
 		return nil
+	} else if strings.HasPrefix(cmd, "echo ") {
+		io.WriteString(w, cmd[5:]+"\n")
+		return nil
+	} else if strings.HasPrefix(cmd, "scp -t ") {
+		io.WriteString(w, "scp: Protocol error.")
+		return nil
 	}
+
 	if client != nil {
 		output, err := generateOutputOpenAI(cmd, sshCtx)
 		io.WriteString(w, output)
@@ -278,7 +285,8 @@ outer:
 			if buf[i] == '\n' {
 				// echo back the line
 				ch.Write(buf[previousNewline : i+1])
-				if bytes.Equal(bytes.TrimSpace(buf[previousNewline:i+1]), []byte("exit")) {
+				cmdline := string(bytes.TrimSpace(buf[previousNewline : i+1]))
+				if cmdline == "exit" || cmdline == "logout" {
 					break outer
 				}
 
