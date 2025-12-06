@@ -34,7 +34,7 @@ func (sshCtx SSHContext) String() string {
 		"System information:\nHostname: %s\nUser: %s\nTime: %s",
 		sshCtx.Hostname,
 		sshCtx.User,
-		sshCtx.T.Format(rfc2822))
+		sshCtx.T.Format(time.RubyDate))
 }
 
 var (
@@ -48,6 +48,9 @@ var (
 		"SSH-2.0-OpenSSH_8.4p1 Debian-2~bpo10+1",
 		"SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u1",
 	}
+	serverVersion = serverVersions[mathrand.Intn(len(serverVersions))]
+
+	_ = errBadPassword // suppress unused variable warning
 )
 
 const (
@@ -97,7 +100,7 @@ func main() {
 	serverConfig := &ssh.ServerConfig{
 		MaxAuthTries:     3,
 		PasswordCallback: passwordCallback,
-		ServerVersion:    serverVersions[0],
+		ServerVersion:    serverVersion,
 	}
 
 	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -135,7 +138,6 @@ func passwordCallback(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions,
 
 func handleConn(conn net.Conn, serverConfig *ssh.ServerConfig) {
 	defer conn.Close()
-	logger.Printf("[conn] ip=%s\n", conn.RemoteAddr())
 	c, newChanCh, reqCh, err := ssh.NewServerConn(conn, serverConfig)
 	if err != nil {
 		if _, ok := err.(*ssh.ServerAuthError); ok {
@@ -149,6 +151,7 @@ func handleConn(conn net.Conn, serverConfig *ssh.ServerConfig) {
 		}
 		return
 	}
+	logger.Printf("[conn] ip=%s\n", conn.RemoteAddr())
 	defer c.Close()
 	go ssh.DiscardRequests(reqCh)
 	handleServerConn(c, newChanCh)
@@ -202,17 +205,9 @@ func generateOutput(w io.Writer, cmd string, sshCtx SSHContext) error {
 		return err
 	}
 
-	// Manual response generation
-	switch cmd {
-	case "nproc; uname -a":
-		w.Write([]byte("16\nLinux localhost 4.19.0-16-amd64 #1 SMP Debian 4.19.181-1 (2021-03-19) x86_64 GNU/Linux\n"))
-	case "echo xsec":
-		w.Write([]byte("xsec\n"))
-	default:
-		junkSize := cmdlen + mathrand.Intn(3*cmdlen)
-		io.CopyN(w, rand.Reader, int64(junkSize))
-		w.Write([]byte{'\n'})
-	}
+	junkSize := cmdlen + mathrand.Intn(3*cmdlen)
+	io.CopyN(w, rand.Reader, int64(junkSize))
+	w.Write([]byte{'\n'})
 	return nil
 }
 
@@ -279,7 +274,7 @@ outer:
 		total += n
 
 		previousNewline := 0
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if buf[i] == '\n' {
 				// echo back the line
 				ch.Write(buf[previousNewline : i+1])
@@ -303,7 +298,7 @@ outer:
 	}
 
 	dur := time.Since(start)
-	dur -= dur % time.Second
+	dur = dur.Round(time.Second)
 	logger.Printf("[shell] ip=%s duration=%s bytes=%d head=%q\n", c.RemoteAddr(), dur, total, head)
 	ch.SendRequest("exit-status", false, []byte{0, 0, 0, 0})
 }
