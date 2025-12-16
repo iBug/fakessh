@@ -4,7 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"flag"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -25,42 +26,96 @@ type SaveState struct {
 	Commands map[string]string `json:"commands"`
 }
 
-var (
-	client      *openai.Client
-	model       string = openai.GPT4oMini
-	statePath   string
-	saveState   SaveState
-	saveStateMu sync.RWMutex
+//go:embed system_prompt.txt
+var embeddedSystemPrompt string
 
-	//go:embed system_prompt.txt
+// AIOutputGenerator 封装了调用 OpenAI 生成输出所需的全部状态。
+type AIOutputGenerator struct {
+	client       *openai.Client
+	model        string
+	statePath    string
+	saveState    SaveState
+	saveStateMu  sync.RWMutex
 	systemPrompt string
-)
-
-func loadCommands() error {
-	f, err := os.Open(defaultSaveStatePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	saveStateMu.Lock()
-	defer saveStateMu.Unlock()
-	return json.NewDecoder(f).Decode(&saveState)
+	baseURL      string
 }
 
-func saveCommands() error {
-	f, err := os.Create(defaultSaveStatePath)
+// NewAIOutputGenerator 根据配置构造一个基于 OpenAI 的输出生成器实例。
+//
+// 要求：cfg.Output.APIKey 必须非空，否则返回错误。
+// 模型名称默认使用 openai.GPT4oMini，可通过配置 output.model 覆盖。
+// 若配置了 output.base_url，则会覆盖默认的 OpenAI 接口地址。
+func NewAIOutputGenerator(cfg *Config) (*AIOutputGenerator, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+
+	apiKey := strings.TrimSpace(cfg.Output.APIKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("output.api_key is empty")
+	}
+
+	model := strings.TrimSpace(cfg.Output.Model)
+	if model == "" {
+		model = openai.GPT4oMini
+	}
+
+	baseURL := strings.TrimSpace(cfg.Output.BaseURL)
+
+	config := openai.DefaultConfig(apiKey)
+	if baseURL != "" {
+		config.BaseURL = baseURL
+	}
+
+	client := openai.NewClientWithConfig(config)
+
+	g := &AIOutputGenerator{
+		client:       client,
+		model:        model,
+		statePath:    defaultSaveStatePath,
+		saveState:    SaveState{},
+		systemPrompt: embeddedSystemPrompt,
+		baseURL:      baseURL,
+	}
+
+	// 尝试从磁盘加载历史命令缓存，失败时仅记录日志并继续使用空缓存。
+	if err := g.loadCommands(); err != nil {
+		log.Printf("Error loading saved command output from %s: %v", g.statePath, err)
+	}
+	if g.saveState.Commands == nil {
+		g.saveState.Commands = make(map[string]string)
+	}
+
+	return g, nil
+}
+
+func (g *AIOutputGenerator) loadCommands() error {
+	f, err := os.Open(g.statePath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	saveStateMu.RLock()
-	cmdCopy := make(map[string]string, len(saveState.Commands))
-	for k, v := range saveState.Commands {
+
+	g.saveStateMu.Lock()
+	defer g.saveStateMu.Unlock()
+	return json.NewDecoder(f).Decode(&g.saveState)
+}
+
+func (g *AIOutputGenerator) saveCommands() error {
+	f, err := os.Create(g.statePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	g.saveStateMu.RLock()
+	cmdCopy := make(map[string]string, len(g.saveState.Commands))
+	for k, v := range g.saveState.Commands {
 		if len(k) < maxCommandLength && len(v) < maxOutputLength {
 			cmdCopy[k] = v
 		}
 	}
-	saveStateMu.RUnlock()
+	g.saveStateMu.RUnlock()
 
 	saveStateCopy := SaveState{Commands: cmdCopy}
 	enc := json.NewEncoder(f)
@@ -69,29 +124,32 @@ func saveCommands() error {
 	return enc.Encode(&saveStateCopy)
 }
 
-func getSavedCommand(cmd string) (string, bool) {
-	saveStateMu.RLock()
-	output, ok := saveState.Commands[cmd]
-	saveStateMu.RUnlock()
+func (g *AIOutputGenerator) getSavedCommand(cmd string) (string, bool) {
+	g.saveStateMu.RLock()
+	defer g.saveStateMu.RUnlock()
+	output, ok := g.saveState.Commands[cmd]
 	return output, ok
 }
 
-func setSavedCommand(cmd, output string) error {
-	saveStateMu.Lock()
-	saveState.Commands[cmd] = output
-	saveStateMu.Unlock()
-	return saveCommands()
+func (g *AIOutputGenerator) setSavedCommand(cmd, output string) error {
+	g.saveStateMu.Lock()
+	if g.saveState.Commands == nil {
+		g.saveState.Commands = make(map[string]string)
+	}
+	g.saveState.Commands[cmd] = output
+	g.saveStateMu.Unlock()
+	return g.saveCommands()
 }
 
-func normalizeCommand(cmd string) string {
+func (g *AIOutputGenerator) normalizeCommand(cmd string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(cmd)), " ")
 }
 
-func createCompletion(ctx context.Context, cmd string, sshCtx SSHContext) (string, error) {
+func (g *AIOutputGenerator) createCompletion(ctx context.Context, cmd string, sshCtx SSHContext) (string, error) {
 	messages := []openai.ChatCompletionMessage{
 		{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: systemPrompt,
+			Content: g.systemPrompt,
 		},
 		{
 			Role:    openai.ChatMessageRoleSystem,
@@ -102,53 +160,43 @@ func createCompletion(ctx context.Context, cmd string, sshCtx SSHContext) (strin
 			Content: cmd,
 		},
 	}
-	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:    model,
+
+	resp, err := g.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model:    g.model,
 		Messages: messages,
 	})
 	if err != nil {
 		return "", err
 	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned from OpenAI")
+	}
 	return resp.Choices[0].Message.Content, nil
 }
 
-func generateOutputOpenAI(cmd string, sshCtx SSHContext) (string, error) {
-	cmd = normalizeCommand(cmd)
-	if output, ok := getSavedCommand(cmd); ok {
-		return output, nil
+// Generate 实现 OutputGenerator 接口，基于 OpenAI 生成命令输出并做本地缓存。
+func (g *AIOutputGenerator) Generate(w io.Writer, cmd string, sshCtx SSHContext) error {
+	normalized := g.normalizeCommand(cmd)
+	if output, ok := g.getSavedCommand(normalized); ok {
+		io.WriteString(w, output)
+		if !strings.HasSuffix(output, "\n") {
+			_, _ = w.Write([]byte("\n"))
+		}
+		return nil
 	}
-	output, err := createCompletion(context.Background(), cmd, sshCtx)
+
+	output, err := g.createCompletion(context.Background(), normalized, sshCtx)
 	if err == nil {
-		err = setSavedCommand(cmd, output)
-	}
-	return output, err
-}
-
-func init() {
-	flag.StringVar(&statePath, "state", defaultSaveStatePath, "save state file path for OpenAI")
-
-	key := os.Getenv("OPENAI_API_KEY")
-	if key == "" {
-		return
-	}
-	log.Print("Found OpenAI API key, enabling AI generation")
-	config := openai.DefaultConfig(key)
-
-	baseURL := os.Getenv("OPENAI_BASEURL")
-	if baseURL != "" {
-		config.BaseURL = baseURL
+		// 持久化缓存属于 best-effort，如果失败只记录日志，不覆盖主流程错误。
+		if errSave := g.setSavedCommand(normalized, output); errSave != nil {
+			log.Printf("Error saving command output: %v", errSave)
+		}
 	}
 
-	aiModel := os.Getenv("OPENAI_MODEL")
-	if aiModel != "" {
-		model = aiModel
+	io.WriteString(w, output)
+	if !strings.HasSuffix(output, "\n") {
+		_, _ = w.Write([]byte("\n"))
 	}
 
-	client = openai.NewClientWithConfig(config)
-	if err := loadCommands(); err != nil {
-		log.Print("Error loading saved command output:", err)
-	}
-	if saveState.Commands == nil {
-		saveState.Commands = make(map[string]string)
-	}
+	return err
 }

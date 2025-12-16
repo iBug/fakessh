@@ -87,6 +87,14 @@ func main() {
 	flag.Parse()
 
 	openLogFile()
+
+	cfg := LoadConfig(defaultConfigPath, logger)
+	var err error
+	generator, err = NewOutputGenerator(cfg, logger)
+	if err != nil {
+		logger.Printf("failed to initialize output generator: %v", err)
+		os.Exit(1)
+	}
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGHUP)
 	go func(c <-chan os.Signal) {
@@ -191,7 +199,6 @@ func handleSessionChannel(c *ssh.ServerConn, ch ssh.Channel, reqs <-chan *ssh.Re
 }
 
 func generateOutput(w io.Writer, cmd string, sshCtx SSHContext) error {
-	cmdlen := len(cmd)
 	if cmd == "help" {
 		fmt.Fprintf(w, "Glad you asked. This is %s, go and read the code by yourself.\n", myHomepage)
 		return nil
@@ -203,19 +210,11 @@ func generateOutput(w io.Writer, cmd string, sshCtx SSHContext) error {
 		return nil
 	}
 
-	if client != nil {
-		output, err := generateOutputOpenAI(cmd, sshCtx)
-		io.WriteString(w, output)
-		if !strings.HasSuffix(output, "\n") {
-			w.Write([]byte("\n"))
-		}
-		return err
+	if generator == nil {
+		return errors.New("output generator is not initialized")
 	}
 
-	junkSize := cmdlen + mathrand.Intn(3*cmdlen)
-	io.CopyN(w, rand.Reader, int64(junkSize))
-	w.Write([]byte{'\n'})
-	return nil
+	return generator.Generate(w, cmd, sshCtx)
 }
 
 func handleExecRequest(c *ssh.ServerConn, ch ssh.Channel, req *ssh.Request) {
@@ -291,8 +290,8 @@ outer:
 				}
 
 				previousNewline = i + 1
-				junkSize := len(head) + mathrand.Intn(3*len(head))
-				io.CopyN(ch, rand.Reader, int64(junkSize))
+				defaultSize := len(head) + mathrand.Intn(3*len(head))
+				io.CopyN(ch, rand.Reader, int64(defaultSize))
 				ch.Write([]byte{'\n'})
 				io.WriteString(ch, prompt)
 			}

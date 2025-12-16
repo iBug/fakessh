@@ -1,0 +1,5 @@
+output:
+  mode: openai
+  api-key: sk-xxxxxx
+  #model: 4o-mini
+  #baseurl: ?
