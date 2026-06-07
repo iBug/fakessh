@@ -18,8 +18,6 @@ type OutputConfig struct {
 	BaseURL string `yaml:"baseurl"`
 }
 
-const defaultConfigPath = "config.yml"
-
 // LoadConfig 从给定路径读取 YAML 配置文件，并在出现错误时返回空配置，方便调用方做安全降级。
 func LoadConfig(path string, logger *log.Logger) *Config {
 	data, err := os.ReadFile(path)

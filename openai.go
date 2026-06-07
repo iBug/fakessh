@@ -2,29 +2,28 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
-	"sync"
+	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/sashabaranov/go-openai"
 )
 
 const (
-	defaultSaveStatePath = "/var/lib/fakessh/commands.json"
+	defaultSaveStatePath = "/var/lib/fakessh/commands.sqlite3"
+	cacheMaxAge          = 7 * 24 * time.Hour
 
 	// Long commands and outputs are discarded to save space
 	maxCommandLength = 256
 	maxOutputLength  = 1024
 )
-
-type SaveState struct {
-	Commands map[string]string `json:"commands"`
-}
 
 //go:embed system_prompt.txt
 var embeddedSystemPrompt string
@@ -34,8 +33,7 @@ type AIOutputGenerator struct {
 	client       *openai.Client
 	model        string
 	statePath    string
-	saveState    SaveState
-	saveStateMu  sync.RWMutex
+	db           *sql.DB
 	systemPrompt string
 	baseURL      string
 }
@@ -73,72 +71,81 @@ func NewAIOutputGenerator(cfg *Config) (*AIOutputGenerator, error) {
 		client:       client,
 		model:        model,
 		statePath:    defaultSaveStatePath,
-		saveState:    SaveState{},
 		systemPrompt: embeddedSystemPrompt,
 		baseURL:      baseURL,
 	}
 
-	// 尝试从磁盘加载历史命令缓存，失败时仅记录日志并继续使用空缓存。
-	if err := g.loadCommands(); err != nil {
-		log.Printf("Error loading saved command output from %s: %v", g.statePath, err)
-	}
-	if g.saveState.Commands == nil {
-		g.saveState.Commands = make(map[string]string)
+	// 尝试初始化磁盘命令缓存，失败时仅记录日志并继续无缓存运行。
+	if err := g.initCommandsDB(); err != nil {
+		log.Printf("Error initializing saved command output database %s: %v", g.statePath, err)
 	}
 
 	return g, nil
 }
 
-func (g *AIOutputGenerator) loadCommands() error {
-	f, err := os.Open(g.statePath)
+func (g *AIOutputGenerator) initCommandsDB() error {
+	if err := os.MkdirAll(filepath.Dir(g.statePath), 0o755); err != nil {
+		return err
+	}
+
+	db, err := sql.Open("sqlite3", g.statePath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
-	g.saveStateMu.Lock()
-	defer g.saveStateMu.Unlock()
-	return json.NewDecoder(f).Decode(&g.saveState)
-}
-
-func (g *AIOutputGenerator) saveCommands() error {
-	f, err := os.Create(g.statePath)
-	if err != nil {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS commands (
+			id INTEGER PRIMARY KEY,
+			command TEXT NOT NULL UNIQUE,
+			output TEXT NOT NULL,
+			updated_at DATETIME NOT NULL
+		)
+	`); err != nil {
+		_ = db.Close()
 		return err
 	}
-	defer f.Close()
 
-	g.saveStateMu.RLock()
-	cmdCopy := make(map[string]string, len(g.saveState.Commands))
-	for k, v := range g.saveState.Commands {
-		if len(k) < maxCommandLength && len(v) < maxOutputLength {
-			cmdCopy[k] = v
-		}
-	}
-	g.saveStateMu.RUnlock()
-
-	saveStateCopy := SaveState{Commands: cmdCopy}
-	enc := json.NewEncoder(f)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	return enc.Encode(&saveStateCopy)
+	g.db = db
+	return nil
 }
 
 func (g *AIOutputGenerator) getSavedCommand(cmd string) (string, bool) {
-	g.saveStateMu.RLock()
-	defer g.saveStateMu.RUnlock()
-	output, ok := g.saveState.Commands[cmd]
-	return output, ok
+	if g.db == nil {
+		return "", false
+	}
+
+	var output string
+	cutoff := time.Now().Add(-cacheMaxAge).UTC().Format(time.RFC3339Nano)
+	err := g.db.QueryRow(
+		"SELECT output FROM commands WHERE command = ? AND updated_at >= ?",
+		cmd,
+		cutoff,
+	).Scan(&output)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			log.Printf("Error reading saved command output: %v", err)
+		}
+		return "", false
+	}
+	return output, true
 }
 
 func (g *AIOutputGenerator) setSavedCommand(cmd, output string) error {
-	g.saveStateMu.Lock()
-	if g.saveState.Commands == nil {
-		g.saveState.Commands = make(map[string]string)
+	if g.db == nil {
+		return nil
 	}
-	g.saveState.Commands[cmd] = output
-	g.saveStateMu.Unlock()
-	return g.saveCommands()
+	if len(cmd) >= maxCommandLength || len(output) >= maxOutputLength {
+		return nil
+	}
+
+	_, err := g.db.Exec(`
+		INSERT INTO commands (command, output, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(command) DO UPDATE SET
+			output = excluded.output,
+			updated_at = excluded.updated_at
+	`, cmd, output, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
 }
 
 func (g *AIOutputGenerator) normalizeCommand(cmd string) string {

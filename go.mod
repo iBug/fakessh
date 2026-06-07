@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/goccy/go-yaml v1.19.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.45.0

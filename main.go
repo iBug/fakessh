@@ -54,12 +54,14 @@ var (
 )
 
 const (
+	defaultConfigPath = "config.yml"
 	defaultLogPath    = "/var/log/fakessh/fakessh.log"
 	defaultListenAddr = ":22"
 	myHomepage        = "https://github.com/iBug/fakessh"
 )
 
 var (
+	configPath string
 	logPath    string
 	listenAddr string
 
@@ -82,13 +84,14 @@ func openLogFile() error {
 }
 
 func main() {
+	flag.StringVar(&configPath, "c", defaultConfigPath, "config file path")
 	flag.StringVar(&logPath, "log", defaultLogPath, "log file path")
 	flag.StringVar(&listenAddr, "listen", defaultListenAddr, "listen address")
 	flag.Parse()
 
 	openLogFile()
 
-	cfg := LoadConfig(defaultConfigPath, logger)
+	cfg := LoadConfig(configPath, logger)
 	var err error
 	generator, err = NewOutputGenerator(cfg, logger)
 	if err != nil {
