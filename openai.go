@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultSaveStatePath = "/var/lib/fakessh/commands.sqlite3"
+	defaultSaveStatePath = "/var/lib/fakessh/state.db"
 	cacheMaxAge          = 7 * 24 * time.Hour
 
 	// Long commands and outputs are discarded to save space
@@ -76,14 +76,14 @@ func NewAIOutputGenerator(cfg *Config) (*AIOutputGenerator, error) {
 	}
 
 	// 尝试初始化磁盘命令缓存，失败时仅记录日志并继续无缓存运行。
-	if err := g.initCommandsDB(); err != nil {
+	if err := g.initDB(); err != nil {
 		log.Printf("Error initializing saved command output database %s: %v", g.statePath, err)
 	}
 
 	return g, nil
 }
 
-func (g *AIOutputGenerator) initCommandsDB() error {
+func (g *AIOutputGenerator) initDB() error {
 	if err := os.MkdirAll(filepath.Dir(g.statePath), 0o755); err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (g *AIOutputGenerator) getSavedCommand(cmd string) (string, bool) {
 	}
 
 	var output string
-	cutoff := time.Now().Add(-cacheMaxAge).UTC().Format(time.RFC3339Nano)
+	cutoff := time.Now().Add(-cacheMaxAge).UTC().Format(time.RFC3339)
 	err := g.db.QueryRow(
 		"SELECT output FROM commands WHERE command = ? AND updated_at >= ?",
 		cmd,
@@ -144,7 +144,7 @@ func (g *AIOutputGenerator) setSavedCommand(cmd, output string) error {
 		ON CONFLICT(command) DO UPDATE SET
 			output = excluded.output,
 			updated_at = excluded.updated_at
-	`, cmd, output, time.Now().UTC().Format(time.RFC3339Nano))
+	`, cmd, output, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
